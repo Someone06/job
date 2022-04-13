@@ -22,9 +22,6 @@ from enum import (
     auto,
     unique,
 )
-from itertools import (
-    chain,
-)
 from pathlib import (
     Path,
 )
@@ -65,20 +62,19 @@ C = TypeVar("C", bound="Comparable")
 
 
 def bin_search(
-    elements: list[T], goal: T, *, key: Callable[[T], C], asc: bool = True
+    elements: list[T], goal: C, *, key: Callable[[T], C], asc: bool = True
 ) -> Optional[tuple[int, int]]:
     low = 0
     high = len(elements)
     found: Optional[int] = None
-    g = key(goal)
 
     while low < high:
         mid = (low + high) // 2
         value = key(elements[mid])
-        if value == g:
+        if value == goal:
             found = mid
             break
-        elif (value < g and asc) or (value > g and not asc):
+        elif (value < goal and asc) or (value > goal and not asc):
             low = mid + 1
         else:
             high = mid
@@ -87,10 +83,10 @@ def bin_search(
         low = found
         high = found + 1
 
-        while low > 0 and key(elements[low - 1]) == g:
+        while low > 0 and key(elements[low - 1]) == goal:
             low -= 1
 
-        while high < len(elements) and key(elements[high]) == g:
+        while high < len(elements) and key(elements[high]) == goal:
             high += 1
 
         return (low, high)
@@ -174,37 +170,30 @@ class InvalidKindError(Exception):
 class Records:
     def __init__(self, path: Path) -> None:
         self._path = path
-        self._old_records: list[Record] = list()
-        self._new_records: list[Record] = list()
+        self._records: list[Record] = list()
+        self._new = 0
 
     def _check_kind(self, kind: Kind) -> None:
-        newest = (
-            self._new_records[-1]
-            if self._new_records
-            else self._old_records[-1]
-            if self._old_records
-            else None
-        )
-        if newest and newest.get_kind() == kind:
-            eprint(f"Expected kind '{newest.get_kind().other()}' but got kind '{kind}'")
+        newest = self._records[-1] if self._records else None
+        if (newest and newest.get_kind() == kind) or (
+            newest is None and kind != Kind.START
+        ):
+            eprint(f"Expected kind '{Kind.START}' but got kind '{kind}'")
             raise InvalidKindError()
 
     def add_record(self, kind: Kind) -> None:
         self._check_kind(kind)
         record = Record(datetime.now(), kind)
-        self._new_records.append(record)
+        self._records.append(record)
 
     def with_date(self, d: date) -> list[Record]:
-        a = self._old_records + self._new_records
-        time = datetime.fromordinal(d.toordinal())
-        dummy = Record(time, Kind.START)
-        r = bin_search(a, dummy, key=lambda r: r.get_time().date())
+        r = bin_search(self._records, d, key=lambda r: r.get_time().date())
         if r is not None:
             (low, high) = r
-            if a[low].get_kind() == Kind.STOP:
+            if self._records[low].get_kind() == Kind.STOP:
                 # We know records start with kind START, so this is fine.
                 low -= 1
-            return a[low:high]
+            return self._records[low:high]
         else:
             return list()
 
@@ -213,17 +202,18 @@ class Records:
             had_record_parse_error = False
             for number, line in enumerate(file, start=1):
                 try:
-                    self._old_records.append(Record.parse(line))
+                    self._records.append(Record.parse(line))
                 except RecordParseError:
                     had_record_parse_error = True
                     eprint(f"[line {number}] Cannot parse '{line}'")
 
+            self._new = len(self._records)
             if had_record_parse_error:
                 raise FileFormatError()
 
     def _check_records_sorted(self) -> None:
-        for (index, current) in enumerate(self._old_records[1:], start=1):
-            prev = self._old_records[index - 1]
+        for (index, current) in enumerate(self._records[1:], start=1):
+            prev = self._records[index - 1]
             if prev.get_time() > current.get_time():
                 eprint(
                     f"Records are not ordered oldest to newest. See records {index} and {index + 1}"
@@ -231,19 +221,19 @@ class Records:
                 raise FileFormatError()
 
     def _check_records_in_past(self) -> None:
-        if self._old_records:
-            newest = self._old_records[-1]
+        if self._records:
+            newest = self._records[-1]
             if newest.get_time() > datetime.now():
                 eprint("Records reference the future")
                 raise FileFormatError()
 
     def _check_start_stop_pairs(self) -> None:
-        if self._old_records:
-            if self._old_records[0].get_kind() != Kind.START:
+        if self._records:
+            if self._records[0].get_kind() != Kind.START:
                 eprint("The first records must be a start")
 
-            for (index, current) in enumerate(self._old_records[1:], start=1):
-                prev = self._old_records[index - 1]
+            for (index, current) in enumerate(self._records[1:], start=1):
+                prev = self._records[index - 1]
                 if prev.get_kind() != current.get_kind().other():
                     eprint(
                         f"Lines {index} and {index + 1} have the same kind of record"
@@ -258,17 +248,16 @@ class Records:
         return self
 
     def __exit__(self, ex_type, ex_value, ex_traceback) -> None:
-        if ex_type is None:
+        if ex_type is None and len(self._records) > self._new:
             with open(self._path, "a") as file:
-                file.writelines(str(record) + "\n" for record in self._new_records)
-                self._old_records.extend(self._new_records)
-                self._new_records.clear()
+                file.writelines(
+                    str(record) + "\n" for record in self._records[self._new :]
+                )
 
     def __str__(
         self,
     ) -> str:
-        records = chain(iter(self._old_records), iter(self._new_records))
-        return "\n".join(str(r) for r in records)
+        return "\n".join(str(r) for r in self._records)
 
 
 def print_times(records: list[Record]) -> None:
@@ -305,7 +294,7 @@ def main() -> None:
     try:
         with Records(args.records_file) as records:
             records.add_record(args.operation)
-            print_times(records.with_date(datetime.today()))
+            print_times(records.with_date(date.today()))
     except FileNotFoundError:
         eprint(f"File '{args.records_file}' not found")
     except (FileFormatError, InvalidKindError):
