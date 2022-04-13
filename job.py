@@ -4,6 +4,9 @@ from __future__ import (
     annotations,
 )
 
+from abc import (
+    abstractmethod,
+)
 from argparse import (
     ArgumentParser,
 )
@@ -27,6 +30,71 @@ from pathlib import (
 from sys import (
     stderr,
 )
+from typing import (
+    Any,
+    Callable,
+    Optional,
+    Protocol,
+    TypeVar,
+)
+
+
+class Comparable(Protocol):
+    @abstractmethod
+    def __eq__(self, other: Any) -> bool:
+        pass
+
+    @abstractmethod
+    def __lt__(self: C, other: C) -> bool:
+        pass
+
+    def __gt__(self: C, other: C) -> bool:
+        return (not self < other) and self != other
+
+    def __le__(self: C, other: C) -> bool:
+        return self < other or self == other
+
+    def __ge__(self: C, other: C) -> bool:
+        return not self < other
+
+
+T = TypeVar("T")
+
+C = TypeVar("C", bound="Comparable")
+
+
+def bin_search(
+    elements: list[T], goal: T, *, key: Callable[[T], C], asc: bool = True
+) -> Optional[tuple[int, int]]:
+    low = 0
+    high = len(elements)
+    found: Optional[int] = None
+    g = key(goal)
+
+    while low < high:
+        mid = (low + high) // 2
+        value = key(elements[mid])
+        if value == g:
+            found = mid
+            break
+        elif (value < g and asc) or (value > g and not asc):
+            low = mid + 1
+        else:
+            high = mid
+
+    if found is not None:
+        low = found
+        high = found + 1
+
+        while low > 0 and key(elements[low - 1]) == g:
+            low -= 1
+
+        while high < len(elements) and key(elements[high]) == g:
+            high += 1
+
+        return (low, high)
+    else:
+        return None
 
 
 def eprint(*args, **kwargs):
