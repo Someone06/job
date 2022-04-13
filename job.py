@@ -14,6 +14,7 @@ from dataclasses import (
     dataclass,
 )
 from datetime import (
+    date,
     datetime,
 )
 from enum import (
@@ -193,6 +194,20 @@ class Records:
         record = Record(datetime.now(), kind)
         self._new_records.append(record)
 
+    def with_date(self, d: date) -> list[Record]:
+        a = self._old_records + self._new_records
+        time = datetime.fromordinal(d.toordinal())
+        dummy = Record(time, Kind.START)
+        r = bin_search(a, dummy, key=lambda r: r.get_time().date())
+        if r is not None:
+            (low, high) = r
+            if a[low].get_kind() == Kind.STOP:
+                # We know records start with kind START, so this is fine.
+                low -= 1
+            return a[low:high]
+        else:
+            return list()
+
     def _parse_records(self) -> None:
         with open(self._path) as file:
             had_record_parse_error = False
@@ -256,6 +271,21 @@ class Records:
         return "\n".join(str(r) for r in records)
 
 
+def print_times(records: list[Record]) -> None:
+    f = "%H:%M"
+    if records:
+        if records[0].get_kind() != Kind.START:
+            print(f"Ignoring record '{records[0]}'")
+
+        if records[-1].get_kind() != Kind.STOP:
+            print("Assuming work time ends now")
+            records.append(Record(datetime.now(), Kind.STOP))
+
+        print("Start - End")
+        for (start, end) in zip(records[::2], records[1::2]):
+            print(f"{start.get_time().strftime(f)} - {end.get_time().strftime(f)}")
+
+
 @dataclass
 class Args:
     records_file: Path
@@ -275,10 +305,10 @@ def main() -> None:
     try:
         with Records(args.records_file) as records:
             records.add_record(args.operation)
-
+            print_times(records.with_date(datetime.today()))
     except FileNotFoundError:
         eprint(f"File '{args.records_file}' not found")
-    except Exception:
+    except (FileFormatError, InvalidKindError):
         pass
 
 
