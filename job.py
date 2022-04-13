@@ -9,6 +9,7 @@ from abc import (
 )
 from argparse import (
     ArgumentParser,
+    ArgumentTypeError,
 )
 from dataclasses import (
     dataclass,
@@ -16,6 +17,7 @@ from dataclasses import (
 from datetime import (
     date,
     datetime,
+    timedelta,
 )
 from enum import (
     Enum,
@@ -278,23 +280,48 @@ def print_times(records: list[Record]) -> None:
 @dataclass
 class Args:
     records_file: Path
-    operation: Kind
+    operation: Optional[Kind]
+    when: date
+
+
+def parse_date(arg_date: str) -> date:
+    year = date.today().year
+    s = arg_date + "-" + str(year)
+
+    try:
+        return datetime.strptime(s, "%d-%m-%Y").date()
+    except ValueError:
+        msg = "Require format day-month for --date"
+        raise ArgumentTypeError(msg)
 
 
 def _parse_args() -> Args:
+    show = "show"
+    today = date.today()
+    yesterday = today - timedelta(days=1)
+
     parser = ArgumentParser()
     parser.add_argument("file", type=Path)
-    parser.add_argument("operation", choices=Kind.names())
+    parser.add_argument("operation", choices=Kind.names() + [show])
+    group = parser.add_mutually_exclusive_group()
+    group.add_argument(
+        "-y", "--yesterday", dest="date", action="store_const", const=yesterday
+    )
+    group.add_argument("-d", "--date", dest="date", type=parse_date)
+
     args = parser.parse_args()
-    return Args(args.file, Kind.parse(args.operation))
+    operation = None if args.operation == show else Kind.parse(args.operation)
+    return Args(args.file, operation, args.date if args.date else today)
 
 
 def main() -> None:
     args = _parse_args()
     try:
         with Records(args.records_file) as records:
-            records.add_record(args.operation)
-            print_times(records.with_date(date.today()))
+            if args.operation:
+                records.add_record(args.operation)
+            else:
+                print_times(records.with_date(args.when))
     except FileNotFoundError:
         eprint(f"File '{args.records_file}' not found")
     except (FileFormatError, InvalidKindError):
